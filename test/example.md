@@ -1,5 +1,7 @@
 # An exhibit of Markdown
 
+[![Build Status](https://travis-ci.org/niquola/md-to-hiccup.svg?branch=master)](https://travis-ci.org/niquola/md-to-hiccup)
+
 This note demonstrates some of what [Markdown][1] is capable of doing.
 
 *Note: Feel free to play with this page. Unlike regular notes, this doesn't automatically save itself.*

@@ -397,10 +397,6 @@
 ")
 
 (parse
- "```clj
-var a = 1
-call(a);
-
-```
-
+ "
+[![Build Status](https://travis-ci.org/niquola/md-to-hiccup.svg?branch=master)](https://travis-ci.org/niquola/md-to-hiccup)
 ")
