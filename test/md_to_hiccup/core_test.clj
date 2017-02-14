@@ -63,6 +63,7 @@
   (sut/parse "[![Build Status](https://travis-ci.org/niquola/md-to-hiccup.svg?branch=master)](https://travis-ci.org/niquola/md-to-hiccup)")
 
   (println (pprint/pprint (parse (slurp (io/resource "example.md")))))
+
   (spit "/tmp/example.md"
         (hiccup.core/html (parse (slurp (io/resource "example.md")))))
   )

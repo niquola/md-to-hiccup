@@ -11,6 +11,11 @@
       (str/replace #"<" "&lt;")
       (str/replace #">" "&gt;")))
 
+(defn escape-code [s]
+  (-> s
+      (str/replace #"<" "&lt;")
+      (str/replace #">" "&gt;")))
+
 (declare parse-inline)
 
 (def inline-rules
@@ -43,6 +48,10 @@
     :f (fn [[_ _ txt]]
          [:strong  txt])}
 
+   {:name :double-code
+    :regex #"^(``([^`]+)``)"
+    :f (fn [[_ _ txt]]
+         [:code  (inline-transformers txt)])}
 
    {:name :inline-code
     :regex #"^(`([^`]+)`)"
@@ -74,14 +83,11 @@
 
 (defn apply-rules [char-idx txt]
   ;; hardcoded rule for code in code
-  (if (and (str/starts-with? txt "``") (< 0 (str/last-index-of txt "``")))
-    (let [last-idx (str/last-index-of txt "``")]
-      [(+ 2 last-idx) [:code (subs txt 2 last-idx)]])
-    (loop [[{:keys [regex f] :as rule} & rules] inline-rules]
-      (when rule
-        (if-let [re-gr (re-find regex txt)]
-          [(+ char-idx (count (second re-gr))) (f re-gr)]
-          (recur rules))))))
+  (loop [[{:keys [regex f] :as rule} & rules] inline-rules]
+    (when rule
+      (if-let [re-gr (re-find regex txt)]
+        [(+ char-idx (count (second re-gr))) (f re-gr)]
+        (recur rules)))))
 
 (apply-rules 0 "*aaa* bb ddd")
 
@@ -255,9 +261,9 @@
     (loop [acc []
            [ln & lns :as prev-lns] lns]
       (if-not ln
-        [[:pre [:code attrs (str/join "\n" acc)]] []]
+        [[:pre [:code attrs (escape-code (str/join "\n" acc))]] []]
         (if (str/starts-with? ln "```")
-          [[:pre [:code attrs (str/join "\n" acc)]] (or lns [])]
+          [[:pre [:code attrs (escape-code (str/join "\n" acc))]] (or lns [])]
           (recur (conj acc ln) lns))))))
 
 
@@ -353,13 +359,14 @@
           (recur :paragraph lns acc [ln])
 
           (= state :paragraph)
-          (cond
-            (= :old-header-1 transition) (recur :default lns (conj acc (parse-old-header :h1 block-acc)) [])
-            (= :old-header-2 transition) (recur :default lns (conj acc (parse-old-header :h2 block-acc)) [])
-            (= :text transition) (recur :paragraph lns acc (conj block-acc ln))
-            (= :end-of-file transition)  (conj acc (parse-paragraph block-acc))
-            (= :empty-line transition) (recur :default lns (conj acc (parse-paragraph block-acc)) [])
-            :else (recur :default prev-lns (conj acc (parse-paragraph (conj block-acc ln))) []))
+          (do
+            (cond
+              (= :old-header-1 transition)   (recur :default lns (conj acc (parse-old-header :h1 block-acc)) [])
+              (= :old-header-2 transition)   (recur :default lns (conj acc (parse-old-header :h2 block-acc)) [])
+              (= :text transition)           (recur :paragraph lns acc (conj block-acc ln))
+              (= :end-of-file transition)    (conj acc (parse-paragraph block-acc))
+              (= :empty-line transition)     (recur :default lns (conj acc (parse-paragraph block-acc)) [])
+              :else (recur :default prev-lns (conj acc (parse-paragraph block-acc)) [])))
 
           (= transition :empty-line)
           (recur state lns (with-paragraph acc) block-acc)
@@ -379,14 +386,14 @@
 
 
 
-(parse "
+;; (parse "
 
-*   a list containing a block of code
+;; *   a list containing a block of code
 
-	    10 PRINT HELLO INFINITE
-	    20 GOTO 10
-"
-       )
+;; 	    10 PRINT HELLO INFINITE
+;; 	    20 GOTO 10
+;; "
+;;        )
 #_(parse
  "
 1. 1
@@ -396,7 +403,17 @@
 2. 2
 ")
 
+;; (parse
+;;  "
+;; [![Build Status](https://travis-ci.org/niquola/md-to-hiccup.svg?branch=master)](https://travis-ci.org/niquola/md-to-hiccup)
+;; ")
+
 (parse
  "
-[![Build Status](https://travis-ci.org/niquola/md-to-hiccup.svg?branch=master)](https://travis-ci.org/niquola/md-to-hiccup)
-")
+``app.js``
+```js
+(function() {
+    var BOX_URL = 'https://myapp.aidbox.io';
+```
+"
+ )
