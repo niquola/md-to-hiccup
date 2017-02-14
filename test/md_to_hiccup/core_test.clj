@@ -3,6 +3,7 @@
             [md-to-hiccup.core :refer :all]
             [clojure.java.io :as io]
             [hiccup.core :as hiccup]
+            [clojure.pprint :as pprint]
             [hickory.core :as hick]
             [md-to-hiccup.core :as sut]
             [clojure.string :as str]
@@ -56,3 +57,10 @@
           ))
       )
     ))
+
+(comment
+
+  (println (pprint/pprint (parse (slurp (io/resource "example.md")))))
+  (spit "/tmp/example.md"
+        (hiccup.core/html (parse (slurp (io/resource "example.md")))))
+  )

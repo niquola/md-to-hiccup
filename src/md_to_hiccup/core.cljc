@@ -7,6 +7,7 @@
   (-> s
       (str/replace #"&" "&amp;")
       (str/replace #"&amp;copy;" "©")
+      (str/replace #"\t$" "    ")
       (str/replace #"<" "&lt;")
       (str/replace #">" "&gt;")))
 
@@ -202,12 +203,13 @@
            [ln & lns :as prev-lns] lns]
       (if (not ln)
         [(flash-buf acc buf) []] 
-        (if-not (or (re-find cut-prefix-regex ln)
-                    (re-matches #"^\s*$" ln))
-          [(flash-buf acc buf) prev-lns]
-          (if-not (str/starts-with? ln prefix)
-            (recur acc (conj buf (cut-fn ln)) lns)
-            (recur (flash-buf acc buf) [(cut-fn ln)] lns)))))))
+        (let [ln (str/replace ln #"^\t" "    ")]
+          (if-not (or (re-find cut-prefix-regex ln)
+                      (re-matches #"^\s*$" ln))
+            [(flash-buf acc buf) prev-lns]
+            (if-not (str/starts-with? ln prefix)
+              (recur acc (conj buf (cut-fn ln)) lns)
+              (recur (flash-buf acc buf) [(cut-fn ln)] lns))))))))
 
 ;; (parse-list [" - a" " - b" " * c"])
 
@@ -247,8 +249,16 @@
 
 ;; (parse-list ["*     a" "  b" "*  c" " fsdfsssss" "* d" "" "  ups"])
 
-(defn- parse-code [lis]
-  (into [:code.block ] (str/join "\n" lis)))
+(defn- parse-code [[ln & lns :as prev-lns]]
+  (let [lang (second (str/split ln #"```" 2))
+        attrs (if (and lang (not (str/blank? lang))) {:lang lang :class lang} {})]
+    (loop [acc []
+           [ln & lns :as prev-lns] lns]
+      (if-not ln
+        [[:pre [:code attrs (str/join "\n" acc)]] []]
+        (if (str/starts-with? ln "```")
+          [[:pre [:code attrs (str/join "\n" acc)]] (or lns [])]
+          (recur (conj acc ln) lns))))))
 
 
 (defn- parse-pre [lis]
@@ -328,19 +338,15 @@
             (= transition :pre) (recur :pre lns acc (conj block-acc ln))
             :else (recur :default prev-lns (conj acc (parse-pre block-acc)) []))
 
-          ;; code
-          (= [:default :code] [state transition])
-          (recur :code lns acc [])
 
           (= [:default :empty-line] [state transition])
           (recur :default lns acc [])
 
-          (= state :code)
-          (cond
-            (= transition :code) (recur :default lns (conj acc (parse-code block-acc)) [])
-            :else (recur :code lns acc (conj block-acc ln)))
-
-
+          ;; code
+          (= [:default :code] [state transition])
+          (let  [[code rest] (parse-code prev-lns)]
+            (recur :default rest (conj acc code) []))
+          
           ;; paragraph
           (= [:default :text] [state transition])
           ;; (and (not= state :blockquote) (= transition :blockquote))
@@ -391,9 +397,10 @@
 ")
 
 (parse
- "
-  * list item 1
-  * list item 2
-  * list item 3
-"
- )
+ "```clj
+var a = 1
+call(a);
+
+```
+
+")
