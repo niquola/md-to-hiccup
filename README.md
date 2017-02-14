@@ -1,5 +1,7 @@
 # md-to-hiccup
 
+[![Build Status](https://travis-ci.org/niquola/md-to-hiccup.svg?branch=master)](https://travis-ci.org/niquola/md-to-hiccup)
+
 Generate hiccup from markdown in one pass
 
 ## Usage
