@@ -10,244 +10,113 @@
       (str/replace #"<" "&lt;")
       (str/replace #">" "&gt;")))
 
-(def escapable #{\\ \` \* \_ \{ \} \[ \] \( \) \# \+ \- \. \!})
-
-(defn tag-inline-char [f s]
-  (cond
-    (and (= f \\) (contains? escapable s)) :escaped-symbol
-    (and (= f \*) (not= s \*)) :emph
-    (and (= f \_) (not= s \_)) :emph
-    (and (= f \h) (= s \t)) :inline-link
-    (and (= f \<) (= s \h)) :auto-link
-    (and (= f \*) (= s \*)) :bold
-    (and (= f \`) (= s \`))  :inline-dcode
-    (and (= f \`) (not= s \`))  :inline-code
-    (and (= f \ ) (= s \ ))  :line-break
-    (and (= f \[)) :link
-    (and (= f \!) (= s \[)) :img
-    :else :norm))
-
-(def link-regx #"^(\[([^\]]+)\]\(([^)]*)\)).*" )
-(def img-regx #"^(!\[([^\]]+)\]\(([^)]*)\)).*" )
-(def bold-regx #"^(\*\*([^*]+)\*\*).*" )
-(def emph-regx #"^((\*|_)([^*]+)(\*|_)).*" )
-(def inline-code-regx #"^(`([^`]+)`).*" )
-(def inline-dcode-regx #"^(``([^`]+)``).*" )
-(def inline-link-regx #"^(https?://[^ ]+).*")
-(def auto-link-regx #"^(<(https?://[^ ]+)>).*")
-(def line-break-regx #"^(\s{5}|\s{2})$")
-
+(declare parse-inline)
 
 (def inline-rules
-  [
-   {:name :escapes
-    :regex #"^(\\\\|\\`|\\\*|\\_|\\\{|\\}|\\\[|\\]|\\\(|\)|\\#|\\\+|\\-|\\\.|\\!)"
+  [{:name :escapes
+    :regex #"^(\\\\|\\`|\\\*|\\_|\\\{|\\}|\\\[|\\]|\\\(|\\\)|\\#|\\\+|\\-|\\\.|\\!)"
     :f (fn [[_ txt]]
-         (println "HERE" (pr-str txt))
          (subs txt 1))}
 
+   {:name :strong
+    :regex #"^(__([^_]+)__)"
+    :f (fn [[_ _ txt]]
+         [:strong  txt])}
+
    {:name :empth
-    :regex #"^((\*|_)([^*]+)(\*|_)).*"
+    :regex #"^((\*|_)([^*]+)(\*|_))"
     :f (fn [[_ _ _ txt]] [:em txt])}
 
    {:name :inline-link
-    :regex #"^(https?://[^ ]+).*"
+    :regex #"^(https?://[^ ]+)"
     :f (fn [[_ txt]]
-         (into [:a {:href (str/replace txt "&amp;" "&")} txt]))}
+         (into [:a {:href txt} txt]))}
 
 
-   :auto-link
-   :auto-link {:regex auto-link-regx
-               :build build-auto-link
-               :inc 2}
-   :bold
-   :bold {:regex bold-regx
-          :build build-bold
-          :inc 1}
+   {:name :auto-link
+    :regex  #"^(<(https?://[^ ]+)>)"
+    :f (fn [[_ _ txt]] (into [:a {:href txt} txt]))}
 
-   ;; :inline-dcode
+   {:name :bold
+    :regex #"^(\*\*([^*]+)\*\*)"
+    :f (fn [[_ _ txt]]
+         [:strong  txt])}
 
-   :inline-code
-   :inline-code {:regex inline-code-regx
-                 :build build-inline-code
-                 :inc 1}
 
-   :line-break
-   :line-break {:regex line-break-regx
-                :build (fn [& _] [:br {}])
-                :inc 0}
+   {:name :inline-code
+    :regex #"^(`([^`]+)`)"
+    :f (fn [[_ _ txt]]
+         [:code  (inline-transformers txt)])}
 
-   :link
-   :link {:regex link-regx
-          :build build-link
-          :inc 1}
-   :img
+   {:name :line-break
+    :regex #"^( {5}| {2})$"
+    :f (fn [& _] [:br ])}
 
-   :img {:regex img-regx
-         :build build-image
-         :inc 1}
+   {:name :link
+    :regex #"^(\[([^\]]+)\]\(([^)]*)\))"
+    :f (fn [[_ _ txt ref]]
+         (let [[ref title & _] (str/split ref #"\s\"")
+               attrs (if title {:href ref :title (str/replace title #"\"$\s*" "")}
+                         {:href ref})]
+           (into [:a attrs] (parse-inline txt))))}
+
+   {:name :img
+    :regex #"^(!\[([^\]]+)\]\(([^)]*)\))"
+    :f (fn [[_ _ txt ref]]
+         (let [[ref title & _] (str/split ref #"\s\"")
+               attrs (if title {:src ref :alt txt :title (str/replace title #"\"$\s*" "")}
+                         {:src ref :alt txt})]
+           [:img attrs]))}
 
    ])
 
 
-(defn apply-rules [txt]
-  (loop [[{:keys [regex f] :as rule} & rules] inline-rules]
-    (when rule
-      (println "RULE:" rule)
-      (if-let [re-gr (re-find regex txt)]
-        (do
-          (println "MATCH:" re-gr 
-                   [(count (second re-gr)) (f re-gr)])
-          [(count (second re-gr)) (f re-gr)])
-        (recur rules)))))
+(defn apply-rules [char-idx txt]
+  ;; hardcoded rule for code in code
+  (if (and (str/starts-with? txt "``") (< 0 (str/last-index-of txt "``")))
+    (let [last-idx (str/last-index-of txt "``")]
+      [(+ 2 last-idx) [:code (subs txt 2 last-idx)]])
+    (loop [[{:keys [regex f] :as rule} & rules] inline-rules]
+      (when rule
+        (if-let [re-gr (re-find regex txt)]
+          [(+ char-idx (count (second re-gr))) (f re-gr)]
+          (recur rules))))))
 
-(apply-rules "*aaa* bb ddd")
+(apply-rules 0 "*aaa* bb ddd")
 
-(defn *parse-inline [txt]
+(defn parse-inline [txt]
   (loop [acc [] char-idx 0 from-char-idx 0]
     (let [txt-tail (subs txt char-idx)
-          [move-to new-elem] (apply-rules txt-tail)]
+          [next-char-idx new-elem] (apply-rules char-idx txt-tail)]
       (cond
         (= "" txt-tail) (if (> char-idx from-char-idx)
-                          (conj acc (subs txt from-char-idx char-idx))
+                          (conj acc (inline-transformers (subs txt from-char-idx char-idx)))
                           acc)
 
-        new-elem (let [next-char-idx (+ char-idx move-to)]
-                   (recur 
-                    (if (> char-idx from-char-idx)
-                      (conj acc (subs txt from-char-idx char-idx) new-elem)
-                      (conj acc new-elem))
-                    next-char-idx next-char-idx))
+        new-elem (recur 
+                  (if (> char-idx from-char-idx)
+                    (conj acc (inline-transformers (subs txt from-char-idx char-idx)) new-elem)
+                    (conj acc new-elem))
+                  next-char-idx next-char-idx)
+        
         :else (recur acc (inc char-idx) from-char-idx)))))
 
 (comment
 
-  (*parse-inline "Hello *amigo* how are you")
+  (parse-inline "Hello *amigo* how are you")
 
   (re-find (:regex (first inline-rules)) "\\*")
   (re-find (:regex (first inline-rules)) "\\\\")
   (re-find (:regex (first inline-rules)) "\\.")
   (re-find (:regex (second inline-rules)) "* some text * and some more text")
+
+  (parse-inline "text **bold** [my super **link** !!](the-url) ![image](http://theurl)")
+  (parse-inline "text **bold** *emph* [my super *emph-link* !!](the-url) ![image](http://theurl)")
+  (parse-inline "text _emph_ [my super _link_ !!](the-url) ![image](http://theurl)")
   )
 
-(def link-regx #"^(\[([^\]]+)\]\(([^)]*)\)).*" )
-(def img-regx #"^(!\[([^\]]+)\]\(([^)]*)\)).*" )
-(def bold-regx #"^(\*\*([^*]+)\*\*).*" )
-(def emph-regx #"^((\*|_)([^*]+)(\*|_)).*" )
-(def inline-code-regx #"^(`([^`]+)`).*" )
-(def inline-dcode-regx #"^(``([^`]+)``).*" )
-(def inline-link-regx #"^(https?://[^ ]+).*")
-(def auto-link-regx #"^(<(https?://[^ ]+)>).*")
-(def line-break-regx #"^(\s{5}|\s{2})$")
-
-(def escaped-symbol-regx #"^(\\(.)).*" )
 
 
-(defn build-link [[_ _ txt ref]]
-  (into [:a {:href (-> ref (str/replace "&amp;" "&"))}]
-        (parse-inline txt)))
-
-(defn build-inline-link [[_ txt]]
-  (into [:a {:href (str/replace txt "&amp;" "&")} txt]))
-
-(defn build-auto-link [[_ _ txt]]
-  (into [:a {:href (str/replace txt "&amp;" "&")} txt]))
-
-(defn build-image [[_ _ txt ref]]
-  (let [[ref title & _] (str/split ref #"\s\"")
-        attrs (if title {:src ref :alt txt :title (str/replace title #"\"$\s*" "")}
-                 {:src ref :alt txt})]
-    [:img attrs]))
-
-(defn build-bold [[_ _ txt]]
-  [:strong {} txt])
-
-(defn build-inline-code [[_ _ txt]]
-  [:code {} (inline-transformers txt)])
-
-(defn build-emph [[a b c txt]]
-  [:em {} txt])
-
-(defn process-inline [txt i {regx :regex build-fn :build incr :inc}]
-  (if-let [re-gr (re-seq regx (subs txt i))]
-    (let [e-txt (second (first re-gr))
-          next-i (+ i (dec (count e-txt)) incr)]
-      [next-i (build-fn (first re-gr))])
-    [(inc i) nil]))
-
-(def inline-starts
-  {
-   :bold {:regex bold-regx
-          :build build-bold
-          :inc 1}
-
-   :emph {:regex emph-regx
-          :build build-emph
-          :inc 1}
-
-   :escaped-symbol {:regex escaped-symbol-regx
-                    :build (fn [[_ _ a]]  a)
-                    :inc 1}
-
-   :link {:regex link-regx
-          :build build-link
-          :inc 1}
-
-   :line-break {:regex line-break-regx
-                :build (fn [& _] [:br {}])
-                :inc 0}
-
-   :inline-dcode {:regex inline-dcode-regx
-                 :build build-inline-code
-                 :inc 2}
-
-   :inline-code {:regex inline-code-regx
-                 :build build-inline-code
-                 :inc 1}
-
-   :inline-link {:regex inline-link-regx
-                 :build build-inline-link
-                 :inc 0}
-
-   :auto-link {:regex auto-link-regx
-               :build build-auto-link
-               :inc 2}
-
-   :amp {:regex #"^(&)"
-         :build (fn [& args]
-                  "&amp;")
-          :inc 2}
-
-   :img {:regex img-regx
-         :build build-image
-         :inc 1}})
-
-(defn parse-inline [txt]
-  (loop [acc []
-         i 0 from-i 0]
-    (let [char (nth txt i nil)
-          next-char (nth txt (inc i) nil)
-          tag (tag-inline-char char next-char)
-          push-state (fn [acc] 
-                       (if (and (not (= from-i (dec i))))
-                         (conj acc (inline-transformers (subs txt from-i (min i (.length txt)))))
-                         acc))]
-      (cond
-        (nil? char) (push-state acc)
-
-        (get inline-starts tag)
-        (let [opts (get inline-starts tag)
-              [next-i new-elem] (process-inline txt i opts)]
-          (if new-elem
-            (recur (conj (push-state acc) new-elem) next-i next-i)
-            (recur acc next-i from-i)))
-
-        :else (recur acc (inc i) from-i)))))
-
-
-;; (parse-inline "text **bold** [my super **link** !!](the-url) ![image](http://theurl)")
-;; (parse-inline "text **bold** *emph* [my super *emph-link* !!](the-url) ![image](http://theurl)")
-;; (parse-inline "text _emph_ [my super _link_ !!](the-url) ![image](http://theurl)")
 
 (declare *parse)
 
@@ -257,20 +126,19 @@
   (cond
     (nil? ln) :end-of-file
     (re-matches #"^\s*$" ln) :empty-line
-    (re-matches #"^\=(=)+$" ln) :old-header-1
+    (re-matches #"^=(=)+$" ln) :old-header-1
     (= ln "- - -") :hr
     (= ln "---") :hr
+    (= ln "___") :hr
     (= ln "-------") :hr
-    (re-matches #"^\--(-)+$" ln) :old-header-2
+    (= ln "***") :hr
+    (re-matches #"^--(-)+$" ln) :old-header-2
     (str/starts-with? ln "#") :header
-    (str/starts-with? ln "* ") :ulist
+    (re-matches #"^(\s*)(\*|-|\+) .+" ln) :ulist
     (str/starts-with? ln "```") :code
     (str/starts-with? ln ">") :blockquote
-    (str/starts-with? ln "__") :hr
-    (str/starts-with? ln "***") :hr
     (re-matches olist-pattern ln) :olist
-    (re-matches #"^\t.*" ln) :pre
-    (re-matches #"^\s\s+.*" ln) :pre
+    (re-matches #"^( {4}|\t).*" ln) :pre
     (re-matches #"^ [^ ]+" ln) :text
     :else :text))
 
@@ -285,10 +153,10 @@
                         count
                         (str "h")
                         keyword)]
-    (into [header-tag {}] (parse-inline header-txt))))
+    (into [header-tag ] (parse-inline header-txt))))
 
 (defn- parse-old-header [tag lis]
-  [tag {} (reduce (fn [acc l] (str acc l)) "" lis)])
+  [tag  (reduce (fn [acc l] (str acc l)) "" lis)])
 
 (defn concat-strings [[i & is]]
   (loop [start true
@@ -311,53 +179,81 @@
                                 (conj (mapv #(str % "\n") (butlast (filterv identity lis))) (last (filterv identity lis)))
                                 lis))
         res (concat-strings inline-parsed)]
-    (println "parse paragraph" (pr-str res))
-    (into [:p {}] res)))
+    (into [:p ] res)))
 
-(defn- parse-list [tag lis]
-  (let [[acc tmp-acc] (reduce (fn [[acc tmp-acc] ln]
-                                (if (str/starts-with? ln "*")
-                                  (let [ln (str/replace ln #"^\* " "")]
-                                    (if (empty? tmp-acc)
-                                      [acc [ln]]
-                                      [(conj acc tmp-acc) [ln]]))
 
-                                  [acc (conj tmp-acc (subs ln 2))])
-                                ) [[] []] lis)
-        acc (if (not (empty? tmp-acc)) (conj acc tmp-acc) acc)]
-    (into [tag] (mapv (fn [lns] (conj (into [:li]
-                                            (let [res (*parse lns)]
-                                              (if (and (= 1 (count res)) (= :p (first res)))
-                                                  (rest res)
-                                                  res))
-                                            ) "\n")) acc))))
+(defn- parse-list [lns]
+  (let [fl (first lns)
+        [prefix pre-sps sym sps] (re-find #"^(\s*)(\*|-|\+)(\s\s*)" fl)
+        max-indent (count sps)
+        escapes {"*" "\\*", "+" "\\+", "-" "-"}
+        cut-prefix-regex (re-pattern (str "^" pre-sps "(" (get escapes sym) "| )"
+                                          " {0," max-indent "}"))
+        cut-fn (fn [x] (str/replace x cut-prefix-regex ""))
+        flash-buf (fn [acc buf]
+                    (if-not buf
+                      acc
+                      (let [item-parsed (*parse buf)]
+                        (if (and (= 1 (count item-parsed)) (= :p (ffirst item-parsed)))
+                          (conj acc (into [:li] (rest (first item-parsed))))
+                          (conj acc (into [:li] item-parsed))))))]
+    (loop [acc [:ul]
+           buf nil
+           [ln & lns :as prev-lns] lns]
+      (if (not ln)
+        [(flash-buf acc buf) []] 
+        (if-not (or (re-find cut-prefix-regex ln)
+                    (re-matches #"^\s*$" ln))
+          [(flash-buf acc buf) prev-lns]
+          (if-not (str/starts-with? ln prefix)
+            (recur acc (conj buf (cut-fn ln)) lns)
+            (recur (flash-buf acc buf) [(cut-fn ln)] lns)))))))
 
-(defn- parse-olist [tag lis]
-  (let [[acc tmp-acc] (reduce (fn [[acc tmp-acc] ln]
-                                (if (re-matches olist-pattern ln)
-                                  (let [ln (second (first (re-seq olist-pattern ln)))]
-                                    (if (empty? tmp-acc)
-                                      [acc [ln]]
-                                      [(conj acc tmp-acc) [ln]]))
+;; (parse-list [" - a" " - b" " * c"])
 
-                                  [acc (conj tmp-acc (subs ln 2))])
-                                ) [[] []] lis)
-        acc (if (not (empty? tmp-acc)) (conj acc tmp-acc) acc)]
-    (into [tag] (mapv (fn [lns]
-                        (let [res (*parse lns)]
-                          (if (and (= 1 (count res)) (= (ffirst res) :p))
-                            (into [:li] (rest (first res)))
-                            (into [:li] res))))
-                      acc))))
+;; (re-find #"^(\s*)(\*|-|\+)(\s\s*)" " - a")
 
+
+;; (str/replace "   c" (first (parse-list [" * a" " * b" " * c"])) "")
+
+;; (parse-list ["* a" " * b" " * c"])
+
+;; (str/replace "   c" (first (parse-list ["* a" " * b" " * c"])) "")
+
+
+(defn- parse-olist [lns]
+  (let [fl (first lns)
+        [_ prefix] (re-find #"^(\d.\s*)" fl)
+        max-indent (count prefix)
+        cut-prefix-regex (re-pattern (str "^(\\d\\.|  ) {0," (- max-indent 2) "}"))
+        cut-fn (fn [x] (str/replace x cut-prefix-regex ""))
+        flash-buf (fn [acc buf]
+                    (if-not buf
+                      acc
+                      (let [item-parsed (*parse buf)]
+                        (if (and (= 1 (count item-parsed)) (= :p (ffirst item-parsed)))
+                          (conj acc (into [:li] (rest (first item-parsed))))
+                          (conj acc (into [:li] item-parsed))))))]
+    (loop [acc [:ol]
+           buf nil
+           [ln & lns :as prev-lns] lns]
+      (if (not ln)
+        [(flash-buf acc buf) []] 
+        (if-not (or (re-find cut-prefix-regex ln) (re-matches #"^\s*$" ln))
+          [(flash-buf acc buf) prev-lns]
+          (if-not (re-find #"^\d\." ln)
+            (recur acc (conj buf (cut-fn ln)) lns)
+            (recur (flash-buf acc buf) [(cut-fn ln)] lns)))))))
+
+;; (parse-list ["*     a" "  b" "*  c" " fsdfsssss" "* d" "" "  ups"])
 
 (defn- parse-code [lis]
-  (into [:code.block {}] (str/join "\n" lis)))
+  (into [:code.block ] (str/join "\n" lis)))
 
 
 (defn- parse-pre [lis]
-  (let [[_ rep] (re-matches #"^(\s*).*" (first lis))]
-    [:pre {} (into [:code {}]
+  (let [[_ rep] (re-matches #"^(\s{4}|\t).*" (first lis))]
+    [:pre  (into [:code ]
                    (concat-strings
                     (mapv (fn [x]
                             (-> x
@@ -369,20 +265,18 @@
 (defn- parse-blockquote [lis]
   (let [[_ rep] (re-matches #"^(>\s*).*" (first lis))
         sp-lengh (- (count rep) 1)]
-    (-> [:blockquote {} ]
+    (-> [:blockquote  ]
         (into (*parse (mapv #(str/replace % (re-pattern (str "^> {0," sp-lengh "}"))  "") lis))))))
 
 
-
 (defn- *parse [lns]
-  (println "*parse" (pr-str lns))
   (loop [state :default
          [ln & lns :as prev-lns] lns
          acc []
          block-acc []]
 
     (let [transition (string-tag ln)]
-      (println "..." [state  transition] ln "; block acc: " block-acc "; acc " acc)
+      ;; (println "..." [state  transition] ln "; block acc: " block-acc "; acc " acc)
       (let [with-paragraph (fn [acc]
                              (if (not (empty? block-acc))
                                (conj acc (parse-paragraph block-acc))
@@ -394,7 +288,7 @@
           (recur :default lns (conj acc (parse-header ln)) [])
 
           (= [state transition] [:default :hr])
-          (recur :default lns (conj acc [:hr {}]) [])
+          (recur :default lns (conj acc [:hr ]) [])
 
 
           ;; blockquote
@@ -418,12 +312,12 @@
 
           ;; ulist
           (= [state transition] [:default :ulist])
-          (recur :ulist lns acc [ln])
+          (let  [[list rest] (parse-list prev-lns)]
+            (recur :default rest (conj acc list) []))
 
-          (= state :ulist)
-          (cond
-            (contains? #{:text :ulist} transition) (recur :ulist lns acc (conj block-acc ln))
-            :else (recur :default prev-lns (conj acc (parse-list :ul block-acc)) []))
+          (= [state transition] [:default :olist])
+          (let  [[list rest] (parse-olist prev-lns)]
+            (recur :default rest (conj acc list) []))
 
           ;; olist
           (= [:default :pre] [state transition])
@@ -433,16 +327,6 @@
           (cond
             (= transition :pre) (recur :pre lns acc (conj block-acc ln))
             :else (recur :default prev-lns (conj acc (parse-pre block-acc)) []))
-
-          ;; olist
-          (= [:default :olist] [state transition])
-          (recur :olist lns acc [ln])
-
-          (= state :olist)
-          (cond
-            (contains? #{:text :olist} transition) (recur :olist lns acc (conj block-acc ln))
-            :else (recur :default prev-lns (conj acc (parse-olist :ol block-acc)) []))
-
 
           ;; code
           (= [:default :code] [state transition])
@@ -487,18 +371,29 @@
 ;; 2. Allow
 ;; 3. Ballow")
 
-(println "==================")
-
-(parse "
-
-heelo     
-humka
-")
-
 
 
 (parse "
 
-heelo  
-humka
+*   a list containing a block of code
+
+	    10 PRINT HELLO INFINITE
+	    20 GOTO 10
+"
+       )
+#_(parse
+ "
+1. 1
+
+    - inner par list
+
+2. 2
 ")
+
+(parse
+ "
+  * list item 1
+  * list item 2
+  * list item 3
+"
+ )

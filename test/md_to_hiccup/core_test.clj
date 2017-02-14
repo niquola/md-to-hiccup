@@ -15,6 +15,9 @@
                   (if (vector? xs)
                     (filterv (fn [x] (not
                                       (or
+                                       (and (string? x)
+                                            (re-matches #"^\n\s*$" x))
+                                       (= {} x)
                                        (= "\r\n\r\n" x)
                                        (= "\r\r" x)
                                        (= "" x) (= "\n" x) (= "\n\n" x)))) xs)
@@ -34,15 +37,16 @@
             out (when (.exists (io/file out-path)) (slurp out-path))]
         (when out
           (let [parsed (clear (sut/parse in))
-                expected (clear (into [:div.md] (map hick/as-hiccup (hick/parse-fragment out))))
-                ]
+                expected (clear (into [:div.md] (map hick/as-hiccup (hick/parse-fragment out))))]
 
             (println "================")
             (println "==" (.getName f) "==")
             (println "================")
             (println in)
-            (println "---EXPECTED-----")
+            (println "---EXPECTED-----\n")
             (println (hiccup/html expected))
+            (println "---EXPECTED HICCUP-----\n")
+            (println (pr-str expected))
             (println "---RESULT-----")
             (println (hiccup/html parsed))
             (is (= parsed expected) (str in "\n" out-path "\n"))
